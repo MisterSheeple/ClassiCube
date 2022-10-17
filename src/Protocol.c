@@ -134,7 +134,7 @@ static void CheckName(EntityID id, cc_string* name, cc_string* skin) {
 	RemoveEndPlus(skin);
 }
 
-static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool interpolate);
+static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool interpolate, cc_bool rel);
 static void AddEntity(cc_uint8* data, EntityID id, const cc_string* name, const cc_string* skin, cc_bool readPosition) {
 	struct LocalPlayer* p = &LocalPlayer_Instance;
 	struct Entity* e;
@@ -153,7 +153,7 @@ static void AddEntity(cc_uint8* data, EntityID id, const cc_string* name, const 
 	Entity_SetName(e, name);
 
 	if (!readPosition) return;
-	Classic_ReadAbsoluteLocation(data, id, false);
+	Classic_ReadAbsoluteLocation(data, id, false, false);
 	if (id != ENTITIES_SELF_ID) return;
 
 	p->Spawn      = p->Base.Position;
@@ -602,7 +602,7 @@ static void Classic_AddEntity(cc_uint8* data) {
 
 static void Classic_EntityTeleport(cc_uint8* data) {
 	EntityID id = *data++;
-	Classic_ReadAbsoluteLocation(data, id, true);
+	Classic_ReadAbsoluteLocation(data, id, true, false);
 }
 
 static void Classic_RelPosAndOrientationUpdate(cc_uint8* data) {
@@ -687,7 +687,7 @@ static void Classic_SetPermission(cc_uint8* data) {
 	HacksComp_RecheckFlags(hacks);
 }
 
-static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool interpolate) {
+static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool interpolate, cc_bool rel) {
 	struct LocationUpdate update;
 	int x, y, z;
 	Vec3 pos;
@@ -713,7 +713,7 @@ static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool in
 	pitch = Math_Packed2Deg(*data++);
 
 	if (id == ENTITIES_SELF_ID) classic_receivedFirstPos = true;
-	LocationUpdate_MakePosAndOri(&update, pos, yaw, pitch, false);
+	LocationUpdate_MakePosAndOri(&update, pos, yaw, pitch, rel);
 	UpdateLocation(id, &update, interpolate);
 }
 
@@ -760,7 +760,7 @@ static const char* cpe_clientExtensions[] = {
 	"EnvWeatherType", "MessageTypes", "HackControl", "PlayerClick", "FullCP437", "LongerMessages",
 	"BlockDefinitions", "BlockDefinitionsExt", "BulkBlockUpdate", "TextColors", "EnvMapAspect",
 	"EntityProperty", "ExtEntityPositions", "TwoWayPing", "InventoryOrder", "InstantMOTD", "FastMap", "SetHotbar",
-	"SetSpawnpoint", "VelocityControl", "CustomParticles", "CustomModels", "PluginMessages",
+	"SetSpawnpoint", "VelocityControl", "CustomParticles", "CustomModels", "PluginMessages", "EntityTeleportExt",
 	/* NOTE: These must be placed last for when EXTENDED_TEXTURES or EXTENDED_BLOCKS are not defined */
 	"ExtendedTextures", "ExtendedBlocks"
 };
@@ -932,10 +932,11 @@ static void CPE_ExtEntry(cc_uint8* data) {
 		if (version == 1) return;
 		Protocol.Sizes[OPCODE_DEFINE_BLOCK_EXT] += 3;
 	} else if (String_CaselessEqualsConst(&ext, "ExtEntityPositions")) {
-		Protocol.Sizes[OPCODE_ENTITY_TELEPORT] += 6;
-		Protocol.Sizes[OPCODE_ADD_ENTITY]      += 6;
-		Protocol.Sizes[OPCODE_EXT_ADD_ENTITY2] += 6;
-		Protocol.Sizes[OPCODE_SET_SPAWNPOINT]  += 6;
+		Protocol.Sizes[OPCODE_ENTITY_TELEPORT]     += 6;
+		Protocol.Sizes[OPCODE_ADD_ENTITY]          += 6;
+		Protocol.Sizes[OPCODE_EXT_ADD_ENTITY2]     += 6;
+		Protocol.Sizes[OPCODE_SET_SPAWNPOINT]      += 6;
+		Protocol.Sizes[OPCODE_ENTITY_TELEPORT_EXT] += 6;
 		cpe_extEntityPos = true;
 	} else if (String_CaselessEqualsConst(&ext, "TwoWayPing")) {
 		cpe_twoWayPing = true;
@@ -1554,6 +1555,14 @@ static void CPE_PluginMessage(cc_uint8* data) {
 	Event_RaisePluginMessage(&NetEvents.PluginMessageReceived, channel, data + 1);
 }
 
+static void CPE_EntityTeleportExt(cc_uint8* data) {
+	EntityID id = *data++;
+	cc_uint8 flags = *data++;
+	cc_bool interpolate = flags & 1;
+	cc_bool relative = flags & 2;
+	Classic_ReadAbsoluteLocation(data, id, interpolate, relative);
+}
+
 static void CPE_Reset(void) {
 	cpe_serverExtensionsCount = 0; cpe_pingTicks = 0;
 	cpe_sendHeldBlock = false; cpe_useMessageTypes = false;
@@ -1600,6 +1609,7 @@ static void CPE_Reset(void) {
 	Net_Set(OPCODE_DEFINE_MODEL_PART, CPE_DefineModelPart, 104);
 	Net_Set(OPCODE_UNDEFINE_MODEL, CPE_UndefineModel, 2);
 	Net_Set(OPCODE_PLUGIN_MESSAGE, CPE_PluginMessage, 66);
+	Net_Set(OPCODE_ENTITY_TELEPORT_EXT, CPE_EntityTeleportExt, 11);
 }
 
 static void CPE_Tick(void) {
