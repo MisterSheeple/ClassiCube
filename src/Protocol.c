@@ -692,6 +692,10 @@ static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool in
 	int x, y, z;
 	Vec3 pos;
 	float yaw, pitch;
+	if (rel) {
+		yaw =   Entities.List[id]->Yaw;
+		pitch = Entities.List[id]->Pitch;
+	}
 
 	if (cpe_extEntityPos) {
 		x = (int)Stream_GetU32_BE(&data[0]);
@@ -705,12 +709,17 @@ static void Classic_ReadAbsoluteLocation(cc_uint8* data, EntityID id, cc_bool in
 		data += 6;
 	}
 
-	y -= 51; /* Convert to feet position */
+	if (!rel) y -= 51; /* Convert to feet position */
 	if (id == ENTITIES_SELF_ID) y += 22;
 
 	pos.X = x/32.0f; pos.Y = y/32.0f; pos.Z = z/32.0f;
-	yaw   = Math_Packed2Deg(*data++);
-	pitch = Math_Packed2Deg(*data++);
+	if (rel) {
+		yaw   += Math_Packed2Deg(*data++);
+		pitch += Math_Packed2Deg(*data++);
+	} else {
+		yaw   = Math_Packed2Deg(*data++);
+		pitch = Math_Packed2Deg(*data++);
+	}
 
 	if (id == ENTITIES_SELF_ID) classic_receivedFirstPos = true;
 	LocationUpdate_MakePosAndOri(&update, pos, yaw, pitch, rel);
