@@ -1,25 +1,29 @@
-John is a custom Minecraft Classic and ClassiCube client written in C that works on Windows, macOS, Linux, Android, iOS, FreeBSD, NetBSD, OpenBSD, Solaris, Haiku, and in a web browser.<br>
+ClassiCube is a custom Minecraft Classic compatible client written in C that works on Windows, macOS, Linux, iOS, Android, FreeBSD, NetBSD, OpenBSD, Solaris, Haiku, IRIX, 3DS (unfinished), PSP (unfinished), and in a web browser.<br>
 **It is not affiliated with (or supported by) Mojang AB, Minecraft, or Microsoft in any way.**
 
 ![screenshot_n](http://i.imgur.com/FCiwl27.png)
 
+You can download ClassiCube [from here](https://www.classicube.net/download/) and the very latest builds [from here](https://www.classicube.net/nightlies/).
 
-You can download the game [from here](https://www.classicube.net/download/) and the very latest builds [from here](https://www.classicube.net/nightlies/).
+### We need your help
+
+ClassiCube strives to support providing an experience identical to the original Minecraft Classic by **strictly following a [clean room](https://en.wikipedia.org/wiki/Clean_room_design) reverse engineering approach**.
+
+If you're interested in documenting or verifying the behaviour of the original Minecraft Classic, please get in contact with me. (`unknownshadow200` on Discord)
 
 ## Information
 
-#### What John is
-* A fork of ClassiCube with a new name, paying tribute to the site's founder, John ClassiCube
+#### What ClassiCube is
 * A complete re-implementation of Minecraft Classic 0.30, with **optional** additions
+* Partially supports some features of Minecraft Classic versions before 0.30
 * Lightweight, minimal memory usage compared to original Minecraft Classic
 * Much better performance than original Minecraft Classic
 * Works with effectively all graphics cards that support OpenGL or Direct3D 9
 
-#### What John isn't
-* It does not add any additional features other than the name change
+#### What ClassiCube isn't
 * It does not work with Minecraft Java or Bedrock edition servers
 * It does not have a survival mode (nor will such a mode be added)
-* It does not reimplement Minecraft Classic versions before 0.30
+* It does not support logging in with Mojang/Minecraft accounts
 
 #### System requirements
 * Windows: 95 or later
@@ -30,50 +34,57 @@ You can download the game [from here](https://www.classicube.net/download/) and 
 **Note:** When running from within VirtualBox, disable Mouse Integration, otherwise the camera will not work properly
 
 #### Instructions
-Initially, you will need to run John.exe to download the required assets from minecraft.net. 
+Initially, you will need to run ClassiCube.exe to download the required assets from minecraft.net and classicube.net.<br>
 Just click 'OK' to the dialog menu that appears when you start the launcher.
 
 **Singleplayer**
-Run John.exe, then click Singleplayer at the main menu.
+Run ClassiCube.exe, then click Singleplayer at the main menu.
 
 **Multiplayer**
-Run John.exe. You can connect to LAN/locally hosted servers, ~~minecraft.net servers,~~ and classicube.net servers through the launcher.
+Run ClassiCube.exe. You can connect to LAN/locally hosted servers, and classicube.net servers if you have a [ClassiCube account](https://www.classicube.net/).
 
-###### *Stuck with OpenGL 1.1 due to old graphics hardware?*
-If you're on Windows, you should first try using the MESA software renderer from [here](http://download.qt.io/development_releases/prebuilt/llvmpipe/windows/). Typically though, this occurs because you have not installed GPU drivers.
+##### *Stuck on OpenGL 1.1?*
+The most common reason for being stuck on OpenGL 1.1 is non-working GPU drivers - so if possible, you should try either installing or updating the drivers for your GPU.
 
-Otherwise, you will have to [compile the game yourself](#using-visual-studio-command-line). Don't forget to add `-DCC_BUILD_GL11` to the compilation command line so that the compiled game supports OpenGL 1.1.
+Otherwise:
+* On Windows, you can still run the OpenGL build of ClassiCube anyways. (You can try downloading and using the MESA software renderer from [here](http://download.qt.io/development_releases/prebuilt/llvmpipe/windows/) for slightly better performance though)
+* On other operating systems, you will have to [compile the game yourself](#Compiling). Don't forget to add `-DCC_BUILD_GL11` to the compilation command line so that the compiled game supports OpenGL 1.1.
+
+# Compiling 
+
+*Note: The various instructions below automatically compile ClassiCube with the recommended defaults for the platform. <br>
+If you (not recommended) want to override the defaults (e.g. to compile OpenGL build on Windows), see [here](doc/overriding-defaults.md) for details.*
 
 ## Compiling - Windows
 
 ##### Using Visual Studio
-Open John.sln *(File -> Open -> Project/Solution)* and compile it *(Build -> Build Solution)*.
+Open ClassiCube.sln *(File -> Open -> Project/Solution)* and compile it *(Build -> Build Solution)*.
 
 If you get a ```The Windows SDK version 5.1 was not found``` compilation error, [see here for how to fix](doc/compile-fixes.md#visual-studio-unsupported-platform-toolset)
 
 ##### Using Visual Studio (command line)
 1. Use 'Developer Tools for Visual Studio' from Start Menu
-2. Navigate to directory with game's source code
-3. Enter `cl.exe *.c /link user32.lib gdi32.lib crypt32.lib ws2_32.lib wininet.lib winmm.lib dbghelp.lib shell32.lib comdlg32.lib /out:John.exe`
+2. Navigate to the directory with ClassiCube's source code
+3. Enter `cl.exe *.c /link user32.lib gdi32.lib winmm.lib dbghelp.lib shell32.lib comdlg32.lib /out:ClassiCube.exe`
 
 ##### Using MinGW-w64
 I am assuming you used the installer from https://sourceforge.net/projects/mingw-w64/
 1. Install MinGW-W64
 2. Use either *Run Terminal* from Start Menu or run *mingw-w64.bat* in the installation folder
-3. Navigate to directory with game's source code
-4. Enter `gcc *.c -o John.exe -mwindows -lwinmm -limagehlp`
+3. Navigate to the directory with ClassiCube's source code
+4. Enter `gcc *.c -o ClassiCube.exe -mwindows -lwinmm -limagehlp`
 
 ##### Using MinGW
-I am assuming you used the installer from http://www.mingw.org/
+I am assuming you used the installer from https://osdn.net/projects/mingw/
 1. Install MinGW. You need mingw32-base-bin and msys-base-bin packages.
 2. Run *msys.bat* in the *C:\MinGW\msys\1.0* folder.
-3. Navigate to directory with game's source code
-4. Enter `gcc *.c -o John.exe -mwindows -lwinmm -limagehlp`
+2. Navigate to the directory with ClassiCube's source code
+4. Enter `gcc *.c -o ClassiCube.exe -mwindows -lwinmm -limagehlp`
 
 ##### Using TCC
 I am assuming you used `tcc-0.9.27-win64-bin.zip` from https://bellard.org/tcc/
 1. Extract the .zip file
-2. In `ExtMath.C`, change `fabsf` to `fabs` and `sqrtf` to `sqrtf`
+2. In `ExtMath.c`, change `fabsf` to `fabs` and `sqrtf` to `sqrtf`
 3. In TCC's `include/math.h`, remove the inline definition for `fabs` at around line 217
 4. In TCC's `lib/kernel32.def`, add missing `RtlCaptureContext`
 5. Add missing include files from `winapi-full-for-0.9.27.zip` as required
@@ -85,30 +96,30 @@ I am assuming you used `tcc-0.9.27-win64-bin.zip` from https://bellard.org/tcc/
 
 Install appropriate libs as required. For ubuntu these are: libx11-dev, libxi-dev and libgl1-mesa-dev
 
-```gcc *.c -o John -rdynamic -lm -lpthread -lX11 -lXi -lGL -ldl```
+```gcc *.c -o ClassiCube -rdynamic -lm -lpthread -lX11 -lXi -lGL -ldl```
 
 ##### Cross compiling for Windows (32 bit):
 
-```i686-w64-mingw32-gcc *.c -o John.exe -mwindows -lwinmm -limagehlp```
+```i686-w64-mingw32-gcc *.c -o ClassiCube.exe -mwindows -lwinmm -limagehlp```
 
 ##### Cross compiling for Windows (64 bit):
 
-```x86_64-w64-mingw32-gcc *.c -o John.exe -mwindows -lwinmm -limagehlp```
+```x86_64-w64-mingw32-gcc *.c -o ClassiCube.exe -mwindows -lwinmm -limagehlp```
 
 ##### Raspberry Pi
 Although the regular linux compiliation flags will work fine, to take full advantage of the hardware:
 
-```gcc *.c -o John -DCC_BUILD_RPI -rdynamic -lm -lpthread -lX11 -lXi -lEGL -lGLESv2 -ldl```
+```gcc *.c -o ClassiCube -DCC_BUILD_RPI -rdynamic -lm -lpthread -lX11 -lXi -lEGL -lGLESv2 -ldl```
 
 ## Compiling - macOS
 
 ##### Using gcc/clang (32 bit)
 
-```cc *.c -o John -framework Carbon -framework AGL -framework OpenGL -framework IOKit```
+```cc *.c -o ClassiCube -framework Carbon -framework AGL -framework OpenGL -framework IOKit```
 
 ##### Using gcc/clang (64 bit)
 
-```cc *.c interop_cocoa.m -o John -framework Cocoa -framework OpenGL -framework IOKit -lobjc```
+```cc *.c interop_cocoa.m -o ClassiCube -framework Cocoa -framework OpenGL -framework IOKit -lobjc```
 
 ## Compiling - for Android
 
@@ -138,39 +149,43 @@ Import `ios/CCIOS.xcodeproj` project into Xcode (TODO explain more detailed)
 
 Install libexecinfo, curl and openal-soft package if needed
 
-```cc *.c -o John -I /usr/local/include -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
+```cc *.c -o ClassiCube -I /usr/local/include -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
 
 #### OpenBSD
 
 Install libexecinfo, curl and openal package if needed
 
-```cc *.c -o John -I /usr/X11R6/include -I /usr/local/include -L /usr/X11R6/lib -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
+```cc *.c -o ClassiCube -I /usr/X11R6/include -I /usr/local/include -L /usr/X11R6/lib -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
 
 #### NetBSD
 
 Install libexecinfo, curl and openal-soft package if needed
 
-```cc *.c -o John -I /usr/X11R7/include -I /usr/pkg/include -L /usr/X11R7/lib -L /usr/pkg/lib  -lpthread -lX11 -lXi -lGL -lexecinfo```
+```cc *.c -o ClassiCube -I /usr/X11R7/include -I /usr/pkg/include -L /usr/X11R7/lib -L /usr/pkg/lib  -lpthread -lX11 -lXi -lGL -lexecinfo```
 
 #### DragonflyBSD
 
-```cc *.c -o John -I /usr/local/include -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
+```cc *.c -o ClassiCube -I /usr/local/include -L /usr/local/lib -lm -lpthread -lX11 -lXi -lGL -lexecinfo```
 
 #### Solaris
 
-```gcc *.c -o John -lm -lsocket -lX11 -lXi -lGL```
+```gcc *.c -o ClassiCube -lm -lsocket -lX11 -lXi -lGL```
 
 #### Haiku
 
 Install openal_devel and libexecinfo_devel package if needed
 
-```cc *.c Window_Haiku.cpp -o John -lm -lexecinfo -lGL -lnetwork -lstdc++ -lbe -lgame -ltracker```
+```cc *.c Window_Haiku.cpp -o ClassiCube -lm -lexecinfo -lGL -lnetwork -lstdc++ -lbe -lgame -ltracker```
+
+#### IRIX
+
+```gcc -lGL -lX11 -lXi -lm -lpthread -ldl```
 
 #### SerenityOS
 
 Install SDL2 port if needed
 
-```cc *.c -o John -lgl -lSDL2```
+```cc *.c -o ClassiCube -lgl -lSDL2```
 
 ## Compiling - other
 
@@ -180,6 +195,14 @@ Install SDL2 port if needed
 
 The generated javascript file has some issues. [See here for how to fix](doc/compile-fixes.md#webclient-patches)
 
+#### PSP
+
+cd into `src` directory, then run `make psp`. You'll need [pspsdk](https://github.com/pspdev/pspsdk)
+
+#### 3DS
+
+cd into `src` directory, then run `make 3ds`. You'll need [libctru](https://github.com/devkitPro/libctru)
+
 ##### Other
 
 You'll have to write the necessary code. You should read portability.md in doc folder.
@@ -188,7 +211,7 @@ You'll have to write the necessary code. You should read portability.md in doc f
 
 Functions and variables in .h files are mostly documented.
 
-Further information (e.g. style) for the game's source code can be found in the doc and misc folders.
+Further information (e.g. style) for ClassiCube's source code can be found in the doc and misc folders.
 
 #### Known compilation errors
 
@@ -216,5 +239,5 @@ Further information (e.g. style) for the game's source code can be found in the 
 * [RenderDoc](https://renderdoc.org/) - graphics debugging
 
 ## Sound Credits
-John uses sounds from [Freesound.org](https://freesound.org)<br>
+ClassiCube uses sounds from [Freesound.org](https://freesound.org)<br>
 Full credits are listed in [doc/sound-credits.md](doc/sound-credits.md)
