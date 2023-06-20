@@ -36,6 +36,8 @@
 #include "Protocol.h"
 #include "Picking.h"
 #include "Animations.h"
+#include "SystemFonts.h"
+#include "Formats.h"
 
 struct _GameData Game;
 cc_uint64 Game_FrameStart;
@@ -388,6 +390,7 @@ static void Game_Load(void) {
 	Game_AddComponent(&Gfx_Component);
 	Game_AddComponent(&Blocks_Component);
 	Game_AddComponent(&Drawer2D_Component);
+	Game_AddComponent(&SystemFonts_Component);
 
 	Game_AddComponent(&Chat_Component);
 	Game_AddComponent(&Particles_Component);
@@ -412,6 +415,7 @@ static void Game_Load(void) {
 	Game_AddComponent(&PickedPosRenderer_Component);
 	Game_AddComponent(&Audio_Component);
 	Game_AddComponent(&AxisLinesRenderer_Component);
+	Game_AddComponent(&Formats_Component);
 
 	LoadPlugins();
 	for (comp = comps_head; comp; comp = comp->next) {
@@ -488,6 +492,7 @@ static void Game_Render3D(double delta, float t) {
 
 	Selections_Render();
 	Entities_RenderHoveredNames();
+	Camera_KeyLookUpdate();
 	InputHandler_Tick();
 	if (!Game_HideGui) HeldBlockRenderer_Render(delta);
 }

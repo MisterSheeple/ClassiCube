@@ -369,13 +369,12 @@ void Window_Create2D(int width, int height) { DoCreateWindow(width, height); }
 void Window_Create3D(int width, int height) { DoCreateWindow(width, height); }
 
 void Window_SetTitle(const cc_string* title) {
-	WCHAR str[NATIVE_STR_LEN];
-	Platform_EncodeUtf16(str, title);
-	if (SetWindowTextW(win_handle, str)) return;
+	cc_winstring str;
+	Platform_EncodeString(&str, title);
+	if (SetWindowTextW(win_handle, str.uni)) return;
 
 	/* Windows 9x does not support W API functions */
-	Platform_Utf16ToAnsi(str);
-	SetWindowTextA(win_handle, (const char*)str);
+	SetWindowTextA(win_handle, str.ansi);
 }
 
 void Clipboard_GetText(cc_string* value) {
@@ -558,28 +557,51 @@ static void ShowDialogCore(const char* title, const char* msg) {
 static cc_result OpenSaveFileDialog(const cc_string* filters, FileDialogCallback callback, cc_bool load,
 									const char* const* fileExts, const cc_string* defaultName) {
 	cc_string path; char pathBuffer[NATIVE_STR_LEN];
-	WCHAR str[MAX_PATH] = { 0 };
-	OPENFILENAMEW ofn   = { 0 };
-	WCHAR filter[MAX_PATH];
+	cc_winstring str  = { 0 };
+	OPENFILENAMEW ofn = { 0 };
+	cc_winstring filter;
+	cc_result res;
 	BOOL ok;
 	int i;
 
-	Platform_EncodeUtf16(str, defaultName);
-	Platform_EncodeUtf16(filter, filters);
-	ofn.lStructSize  = sizeof(ofn);
+	Platform_EncodeString(&str, defaultName);
+	Platform_EncodeString(&filter, filters);
+	/* NOTE: OPENFILENAME_SIZE_VERSION_400 is used instead of sizeof(OFN), because the size of */
+	/*  OPENFILENAME increased after Windows 9x/NT4 with the addition of pvReserved and later fields */
+	/* (and Windows 9x/NT4 return an error if a lStructSize > OPENFILENAME_SIZE_VERSION_400 is used) */
+	ofn.lStructSize  = OPENFILENAME_SIZE_VERSION_400;
+	/* also note that this only works when you *don't* have OFN_HOOK in Flags - if you do, then */
+	/*  on modern Windows versions the dialogs are altered to show an old Win 9x style appearance */
+	/* (see https://github.com/geany/geany/issues/578 for example of this problem) */
+
 	ofn.hwndOwner    = win_handle;
-	ofn.lpstrFile    = str;
+	ofn.lpstrFile    = str.uni;
 	ofn.nMaxFile     = MAX_PATH;
-	ofn.lpstrFilter  = filter;
+	ofn.lpstrFilter  = filter.uni;
 	ofn.nFilterIndex = 1;
 	ofn.Flags = OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | (load ? OFN_FILEMUSTEXIST : OFN_OVERWRITEPROMPT);
 
-	ok = load ? GetOpenFileNameW(&ofn) : GetSaveFileNameW(&ofn);
-	if (!ok) return CommDlgExtendedError();
 	String_InitArray(path, pathBuffer);
+	ok = load ? GetOpenFileNameW(&ofn) : GetSaveFileNameW(&ofn);
+	
+	if (ok) {
+		/* Successfully got a unicode filesystem path */
+		for (i = 0; i < MAX_PATH && str.uni[i]; i++) {
+			String_Append(&path, Convert_CodepointToCP437(str.uni[i]));
+		}
+	} else if ((res = CommDlgExtendedError()) == 2) {
+		/* CDERR_INITIALIZATION - probably running on Windows 9x */
+		ofn.lpstrFile   = str.ansi;
+		ofn.lpstrFilter = filter.ansi;
 
-	for (i = 0; i < MAX_PATH && str[i]; i++) {
-		String_Append(&path, Convert_CodepointToCP437(str[i]));
+		ok = load ? GetOpenFileNameA(&ofn) : GetSaveFileNameA(&ofn);
+		if (!ok) return CommDlgExtendedError();
+
+		for (i = 0; i < MAX_PATH && str.ansi[i]; i++) {
+			String_Append(&path, str.ansi[i]);
+		}
+	} else {
+		return res;
 	}
 
 	/* Add default file extension if user didn't provide one */
@@ -723,14 +745,11 @@ static void GLContext_SelectGraphicsMode(struct GraphicsMode* mode) {
 	pfd.nVersion = 1;
 	pfd.dwFlags  = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER;
 	/* TODO: PFD_SUPPORT_COMPOSITION FLAG? CHECK IF IT WORKS ON XP */
+
 	pfd.cColorBits = mode->R + mode->G + mode->B;
 	pfd.cDepthBits = GLCONTEXT_DEFAULT_DEPTH;
-
 	pfd.iPixelType = PFD_TYPE_RGBA;
-	pfd.cRedBits   = mode->R; // TODO unnecessary??
-	pfd.cGreenBits = mode->G;
-	pfd.cBlueBits  = mode->B;
-	pfd.cAlphaBits = mode->A;
+	pfd.cAlphaBits = mode->A; /* TODO not needed? test on Intel */
 
 	modeIndex = ChoosePixelFormat(win_DC, &pfd);
 	if (modeIndex == 0) { Logger_Abort("Requested graphics mode not available"); }
@@ -739,6 +758,7 @@ static void GLContext_SelectGraphicsMode(struct GraphicsMode* mode) {
 	pfd.nSize = sizeof(PIXELFORMATDESCRIPTOR);
 	pfd.nVersion = 1;
 
+	/* TODO DescribePixelFormat might be unnecessary? */
 	DescribePixelFormat(win_DC, modeIndex, pfd.nSize, &pfd);
 	if (!SetPixelFormat(win_DC, modeIndex, &pfd)) {
 		Logger_Abort2(GetLastError(), "SetPixelFormat failed");

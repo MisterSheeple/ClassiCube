@@ -325,7 +325,8 @@ const cc_uint8 KeyBind_Defaults[KEYBIND_COUNT] = {
 	KEY_F5, KEY_F1, KEY_F7, 'C', 
 	KEY_LCTRL, KEY_LMOUSE, KEY_MMOUSE, KEY_RMOUSE, 
 	KEY_F6, KEY_LALT, KEY_F8, 
-	'G', KEY_F10, 0
+	'G', KEY_F10, 0,
+	0, 0, 0, 0
 };
 static const char* const keybindNames[KEYBIND_COUNT] = {
 	"Forward", "Back", "Left", "Right",
@@ -336,7 +337,8 @@ static const char* const keybindNames[KEYBIND_COUNT] = {
 	"ThirdPerson", "HideGUI", "AxisLines", "ZoomScrolling", 
 	"HalfSpeed", "DeleteBlock", "PickBlock", "PlaceBlock", 
 	"AutoRotate", "HotbarSwitching", "SmoothCamera", 
-	"DropBlock", "IDOverlay", "BreakableLiquids"
+	"DropBlock", "IDOverlay", "BreakableLiquids",
+	"LookUp", "LookDown", "LookRight", "LookLeft"
 };
 
 cc_bool KeyBind_IsPressed(KeyBind binding) { return Input_Pressed[KeyBinds[binding]]; }
@@ -769,13 +771,14 @@ void InputHandler_PickBlock(void) {
 }
 
 void InputHandler_Tick(void) {
+	if (Gui.InputGrab) return;
+
 	cc_bool left, middle, right;
 	TimeMS now = DateTime_CurrentUTC_MS();
 	int delta  = (int)(now - input_lastClick);
 
 	if (delta < 250) return; /* 4 times per second */
 	input_lastClick = now;
-	if (Gui.InputGrab) return;
 
 	left   = KeyBind_IsPressed(KEYBIND_DELETE_BLOCK);
 	middle = KeyBind_IsPressed(KEYBIND_PICK_BLOCK);

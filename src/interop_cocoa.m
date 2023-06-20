@@ -18,6 +18,9 @@ static cc_bool scroll_debugging;
 /*########################################################################################################################*
 *---------------------------------------------------Shared with Carbon----------------------------------------------------*
 *#########################################################################################################################*/
+extern size_t CGDisplayBitsPerPixel(CGDirectDisplayID display);
+// TODO: Try replacing with NSBitsPerPixelFromDepth([NSScreen mainScreen].depth) instead
+
 // NOTE: If code here is changed, don't forget to update corresponding code in Window_Carbon.c
 static void Window_CommonInit(void) {
 	CGDirectDisplayID display = CGMainDisplayID();
@@ -125,13 +128,37 @@ void Clipboard_SetText(const cc_string* value) {
 	[pasteboard setString:str forType:NSStringPboardType];
 }
 
+
+static void LogUnhandled(NSString* str) {
+	if (!str) return;
+	const char* src = [str UTF8String];
+	if (!src) return;
+	
+	cc_string msg = String_FromReadonly(src);
+	Platform_Log(msg.buffer, msg.length);
+	Logger_Log(&msg);
+}
+
+// TODO: Should really be handled elsewhere, in Logger or ErrorHandler
+static void LogUnhandledNSErrors(NSException* ex) {
+	// last chance to log exception details before process dies
+	LogUnhandled(@"About to die from unhandled NSException..");
+	LogUnhandled([ex name]);
+	LogUnhandled([ex reason]);
+}
+
 static NSAutoreleasePool* pool;
 void Window_Init(void) {
+	NSSetUncaughtExceptionHandler(LogUnhandledNSErrors);
+
 	// https://www.cocoawithlove.com/2009/01/demystifying-nsapplication-by.html
 	pool = [[NSAutoreleasePool alloc] init];
 	appHandle = [NSApplication sharedApplication];
 	[appHandle activateIgnoringOtherApps:YES];
 	Window_CommonInit();
+
+	// NSApplication sometimes replaces the uncaught exception handler, so set it again
+	NSSetUncaughtExceptionHandler(LogUnhandledNSErrors);
 }
 
 
@@ -516,10 +543,16 @@ void ShowDialogCore(const char* title, const char* msg) {
 	CFStringRef titleCF, msgCF;
 	NSAlert* alert;
 	
-	alert   = [NSAlert alloc];
-	alert   = [alert init];
 	titleCF = CFStringCreateWithCString(NULL, title, kCFStringEncodingASCII);
 	msgCF   = CFStringCreateWithCString(NULL, msg,   kCFStringEncodingASCII);
+	
+	// backwards compatible @try @catch
+	NS_DURING {
+		alert = [NSAlert alloc];
+		alert = [alert init];
+	} NS_HANDLER {
+		LogUnhandledNSErrors(localException);
+	} NS_ENDHANDLER
 	
 	[alert setMessageText: titleCF];
 	[alert setInformativeText: msgCF];

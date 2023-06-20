@@ -5,17 +5,16 @@
 #include "Funcs.h"
 #include "Bitmap.h"
 #include "Errors.h"
-#include "Window.h"
 #include <3ds.h>
 
-struct _DisplayData DisplayInfo;
-struct _WinData WindowInfo;
+#define CC_INPUT_H
+extern cc_bool Input_RawMode; // Otherwise KEY_ conflicts with 3DS keys
+#include "_WindowBase.h"
 
 // Note from https://github.com/devkitPro/libctru/blob/master/libctru/include/3ds/gfx.h
 //  * Please note that the 3DS uses *portrait* screens rotated 90 degrees counterclockwise.
 //  * Width/height refer to the physical dimensions of the screen; that is, the top screen
 //  * is 240 pixels wide and 400 pixels tall; while the bottom screen is 240x320.
-
 void Window_Init(void) {
 	//gfxInit(GSP_BGR8_OES,GSP_BGR8_OES,false); 
 	//gfxInit(GSP_BGR8_OES,GSP_RGBA8_OES,false);
@@ -26,7 +25,7 @@ void Window_Init(void) {
 	consoleInit(GFX_BOTTOM, NULL);
 	
 	u16 width, height;
-	u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
+	gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
 	
 	DisplayInfo.Width  = height; // deliberately swapped
 	DisplayInfo.Height = width;  // deliberately swapped
@@ -34,8 +33,8 @@ void Window_Init(void) {
 	DisplayInfo.ScaleX = 1;
 	DisplayInfo.ScaleY = 1;
 	
-	WindowInfo.Width  = height; // deliberately swapped
-	WindowInfo.Height = width;  // deliberately swapped
+	WindowInfo.Width   = height; // deliberately swapped
+	WindowInfo.Height  = width;  // deliberately swapped
 	WindowInfo.Focused = true;
 }
 
@@ -62,6 +61,31 @@ void Window_Close(void) {
 }
 
 void Window_ProcessEvents(void) {
+	hidScanInput();
+	/* TODO implement */
+	
+	if (hidKeysDown() & KEY_TOUCH)
+		Input_SetPressed(119); // LMOUSE
+	
+	if (hidKeysUp() & KEY_TOUCH)
+		Input_SetReleased(119); // LMOUSE
+	
+	if (hidKeysHeld() & KEY_TOUCH) {
+		int x, y;
+		Cursor_GetRawPos(&x, &y);
+		Pointer_SetPosition(0, x, y);
+	}
+}
+
+static void Cursor_GetRawPos(int* x, int* y) {
+	touchPosition touch;
+	hidTouchRead(&touch);
+
+	*x = touch.px;
+	*y = touch.py;
+}
+
+static void Cursor_DoSetVisible(cc_bool visible) {
 	/* TODO implement */
 }
 
@@ -69,7 +93,7 @@ void Cursor_SetPosition(int x, int y) {
 	/* TODO implement */
 }
 
-void Window_ShowDialog(const char* title, const char* msg) {
+static void ShowDialogCore(const char* title, const char* msg) {
 	/* TODO implement */
 }
 
@@ -89,11 +113,8 @@ void Window_AllocFramebuffer(struct Bitmap* bmp) {
 
 void Window_DrawFramebuffer(Rect2D r) {
 	u16 width, height;
+	gfxSetDoubleBuffering(GFX_TOP, false);
 	u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &width, &height);
-	//Platform_Log4("SRC: %i,%i (%i,%i)", &r.X, &r.Y, &r.Width, &r.Height);
-	
-	int width_ = width, height_ = height;
-	//Platform_Log2("DST: %i, %i", &width_, &height_);
 
 	// SRC y = 0 to 240
 	// SRC x = 0 to 400
@@ -109,21 +130,61 @@ void Window_DrawFramebuffer(Rect2D r) {
 		fb[addr+1] = BitmapCol_G(color);
 		fb[addr+2] = BitmapCol_R(color);
 	}
-	/* TODO implement */
+	// TODO implement
+	// TODO gspWaitForVBlank();
 	Platform_LogConst("DRAW FB!!!");
 	gfxFlushBuffers();
-	gfxSwapBuffers();
+	//gfxSwapBuffers();
+	// TODO: tearing??
+	gfxSetDoubleBuffering(GFX_TOP, false);
+	gfxScreenSwapBuffers(GFX_TOP, true);
+	gfxSetDoubleBuffering(GFX_TOP, true);
+	gfxScreenSwapBuffers(GFX_BOTTOM, true);
 }
 
 void Window_FreeFramebuffer(struct Bitmap* bmp) {
 	/* TODO implement */
 }
 
-void Window_OpenKeyboard(struct OpenKeyboardArgs* args) { /* TODO implement */ }
+static void OnscreenTextChanged(const char* text) {
+	char tmpBuffer[NATIVE_STR_LEN];
+	cc_string tmp = String_FromArray(tmpBuffer);
+	String_AppendUtf8(&tmp, text, String_Length(text));
+    
+	Event_RaiseString(&InputEvents.TextChanged, &tmp);
+}
+
+void Window_OpenKeyboard(struct OpenKeyboardArgs* args) {
+	const char* btnText = args->type & KEYBOARD_FLAG_SEND ? "Send" : "Enter";
+	char input[NATIVE_STR_LEN]  = { 0 };
+	char output[NATIVE_STR_LEN] = { 0 };
+	SwkbdState swkbd;
+	String_EncodeUtf8(input, args->text);
+	
+	int mode = args->type & 0xFF;
+	int type = (mode == KEYBOARD_TYPE_NUMBER || mode == KEYBOARD_TYPE_INTEGER) ? SWKBD_TYPE_NUMPAD : SWKBD_TYPE_WESTERN;
+	
+	swkbdInit(&swkbd, type, 3, -1);
+	swkbdSetInitialText(&swkbd, input);
+	swkbdSetHintText(&swkbd, args->placeholder);
+	//swkbdSetButton(&swkbd, SWKBD_BUTTON_LEFT, "Cancel", false);
+	//swkbdSetButton(&swkbd, SWKBD_BUTTON_RIGHT, btnText, true);
+	swkbdSetButton(&swkbd, SWKBD_BUTTON_CONFIRM, btnText, true);
+	
+	if (type == KEYBOARD_TYPE_PASSWORD)
+		swkbdSetPasswordMode(&swkbd, SWKBD_PASSWORD_HIDE_DELAY);
+	if (args->multiline)
+		swkbdSetFeatures(&swkbd, SWKBD_MULTILINE);
+		
+	// TODO filter callbacks and Window_Setkeyboardtext ??
+	int btn = swkbdInputText(&swkbd, output, sizeof(output));
+	if (btn != SWKBD_BUTTON_CONFIRM) return;
+	OnscreenTextChanged(output);
+}
 void Window_SetKeyboardText(const cc_string* text) { }
 void Window_CloseKeyboard(void) { /* TODO implement */ }
 
-void Window_EnableRawMouse(void)  { }
-void Window_UpdateRawMouse(void)  { }
-void Window_DisableRawMouse(void) { }
+void Window_EnableRawMouse(void)  { DefaultEnableRawMouse();  }
+void Window_UpdateRawMouse(void)  { DefaultUpdateRawMouse();  }
+void Window_DisableRawMouse(void) { DefaultDisableRawMouse(); }
 #endif

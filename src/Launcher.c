@@ -20,6 +20,7 @@
 #include "Options.h"
 #include "LBackend.h"
 #include "PackedCol.h"
+#include "SystemFonts.h"
 
 struct LScreen* Launcher_Active;
 cc_bool Launcher_ShouldExit, Launcher_ShouldUpdate;
@@ -60,7 +61,8 @@ void Launcher_DisplayHttpError(struct HttpRequest* req, const char* action, cc_s
 	if (res) {
 		/* Non HTTP error - this is not good */
 		Http_LogError(action, req);
-		String_Format2(dst, "&cError %i when %c", &res, action);
+		String_Format2(dst, res >= 0x80000000 ? "&cError %h when %c" : "&cError %i when %c",
+						&res, action);
 	} else if (status != 200) {
 		String_Format2(dst, "&c%i error when %c", &status, action);
 	} else {
@@ -234,6 +236,7 @@ void Launcher_Run(void) {
 #endif
 
 	Drawer2D_Component.Init();
+	SystemFonts_Component.Init();
 	Drawer2D.BitmappedText    = false;
 	Drawer2D.BlackTextShadows = true;
 

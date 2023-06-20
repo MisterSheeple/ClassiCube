@@ -1,6 +1,5 @@
 #include "Core.h"
-#if defined CC_BUILD_3DS
-
+#if defined CC_BUILD_GCWII
 #include "_PlatformBase.h"
 #include "Stream.h"
 #include "ExtMath.h"
@@ -10,36 +9,24 @@
 #include "Errors.h"
 #include "PackedCol.h"
 #include <errno.h>
-#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <poll.h>
-#include <stdio.h>
-#include <malloc.h>
-#include <netdb.h>
-#include <3ds.h>
-#include <citro3d.h>
-
-#define US_PER_SEC 1000000LL
-#define NS_PER_MS 1000000LL
+#include <network.h>
+#include <ogc/lwp.h>
+#include <ogc/mutex.h>
+#include <ogc/cond.h>
+#include <ogc/lwp_watchdog.h>
+#include <fat.h>
 
 const cc_result ReturnCode_FileShareViolation = 1000000000; /* TODO: not used apparently */
 const cc_result ReturnCode_FileNotFound     = ENOENT;
-const cc_result ReturnCode_SocketInProgess  = EINPROGRESS;
-const cc_result ReturnCode_SocketWouldBlock = EWOULDBLOCK;
+const cc_result ReturnCode_SocketInProgess  = -EINPROGRESS; // net_XYZ error results are negative
+const cc_result ReturnCode_SocketWouldBlock = -EWOULDBLOCK;
 const cc_result ReturnCode_DirectoryExists  = EEXIST;
-
-// https://gbatemp.net/threads/homebrew-development.360646/page-245
-// 3DS defaults to stack size of *32 KB*.. way too small
-unsigned int __stacksize__ = 256 * 1024;
 
 
 /*########################################################################################################################*
@@ -70,15 +57,23 @@ void Mem_Free(void* mem) {
 /*########################################################################################################################*
 *------------------------------------------------------Logging/Time-------------------------------------------------------*
 *#########################################################################################################################*/
+// dolphin recognises this function name (if loaded as .elf), and will patch it
+//  to also log the message to dolphin's console at OSREPORT-HLE log level
+void CC_NOINLINE __write_console(int fd, const char* msg, const u32* size) {
+	write(STDOUT_FILENO, msg, *size); // this can be intercepted by libogc debug console
+}
 void Platform_Log(const char* msg, int len) {
-	//cc_file fd = -1;
-	// CITRA LOGGING
-	//cc_string path = String_Init(msg, len, len);
-	//File_Open(&fd, &path);
-	//if (fd > 0) File_Close(fd);
+	char buffer[256];
+	cc_string str = String_Init(buffer, 0, 254); // 2 characters (\n and \0)
+	u32 size;
 	
-	write(STDOUT_FILENO, msg,  len);
-	write(STDOUT_FILENO, "\n",   1);
+	String_AppendAll(&str, msg, len);
+	buffer[str.length + 0] = '\n';
+	buffer[str.length + 1] = '\0'; // needed to make Dolphin logger happy
+	
+	size = str.length + 1; // +1 for '\n'
+	__write_console(0, buffer, &size); 
+	// TODO: Just use printf("%s", somehow ???
 }
 
 #define UnixTime_TotalMS(time) ((cc_uint64)time.tv_sec * 1000 + UNIX_EPOCH + (time.tv_usec / 1000))
@@ -103,16 +98,12 @@ void DateTime_CurrentLocal(struct DateTime* t) {
 }
 
 cc_uint64 Stopwatch_Measure(void) {
-	return svcGetSystemTick();
+	return gettime();
 }
 
 cc_uint64 Stopwatch_ElapsedMicroseconds(cc_uint64 beg, cc_uint64 end) {
-	if (end < beg) return 0;	
-	// TODO: This doesn't seem to accurately measure time in Citra.
-	// hopefully it works better on a real 3DS?
-	
-	// See CPU_TICKS_PER_USEC in libctru/include/3ds/os.h
-	return (end - beg) * US_PER_SEC / SYSCLOCK_ARM11;
+	if (end < beg) return 0;
+	return ticks_to_microsecs(end - beg);
 }
 
 
@@ -120,54 +111,66 @@ cc_uint64 Stopwatch_ElapsedMicroseconds(cc_uint64 beg, cc_uint64 end) {
 *-----------------------------------------------------Directory/File------------------------------------------------------*
 *#########################################################################################################################*/
 void Directory_GetCachePath(cc_string* path) { }
+static bool fat_available; 
+// trying to call mkdir etc with no FAT device loaded seems to be broken (dolphin crashes due to trying to execute invalid instruction)
+//   https://github.com/Patater/newlib/blob/8a9e3aaad59732842b08ad5fc19e0acf550a418a/libgloss/libsysbase/mkdir.c and
+//   https://github.com/Patater/newlib/blob/8a9e3aaad59732842b08ad5fc19e0acf550a418a/newlib/libc/include/sys/iosupport.h
+// would suggest it should just return ENOSYS due to using the 'null' device, but whatever
 
 static void GetNativePath(char* str, const cc_string* path) {
-	static const char root_path[22] = "sdmc://3ds/ClassiCube/";
+	static const char root_path[15] = "sd:/ClassiCube/";
 	Mem_Copy(str, root_path, sizeof(root_path));
 	str += sizeof(root_path);
 	String_EncodeUtf8(str, path);
 }
 
 cc_result Directory_Create(const cc_string* path) {
+	if (!fat_available) return ENOSYS;
+	
 	char str[NATIVE_STR_LEN];
 	GetNativePath(str, path);
-	
-	return mkdir(str, 0666) == -1 ? errno : 0; // FS has no permissions anyways
+	return mkdir(str, 0) == -1 ? errno : 0;
 }
 
 int File_Exists(const cc_string* path) {
+	if (!fat_available) return false;
+	
 	char str[NATIVE_STR_LEN];
 	struct stat sb;
 	GetNativePath(str, path);
-	
 	return stat(str, &sb) == 0 && S_ISREG(sb.st_mode);
 }
 
 cc_result Directory_Enum(const cc_string* dirPath, void* obj, Directory_EnumCallback callback) {
+	if (!fat_available) return ENOSYS;
+
 	cc_string path; char pathBuffer[FILENAME_SIZE];
 	char str[NATIVE_STR_LEN];
 	struct dirent* entry;
-	char* src;
-	int len, res, is_dir;
+	int res;
 
 	GetNativePath(str, dirPath);
 	DIR* dirPtr = opendir(str);
 	if (!dirPtr) return errno;
 
-	/* POSIX docs: "When the end of the directory is encountered, a null pointer is returned and errno is not changed." */
-	/* errno is sometimes leftover from previous calls, so always reset it before readdir gets called */
+	// POSIX docs: "When the end of the directory is encountered, a null pointer is returned and errno is not changed."
+	// errno is sometimes leftover from previous calls, so always reset it before readdir gets called
 	errno = 0;
 	String_InitArray(path, pathBuffer);
 
 	while ((entry = readdir(dirPtr))) {
 		path.length = 0;
 		String_Format1(&path, "%s/", dirPath);
-		src = entry->d_name;
 
-		len = String_Length(src);
+		// ignore . and .. entry
+		char* src = entry->d_name;
+		if (src[0] == '.' && src[1] == '\0') continue;
+		if (src[0] == '.' && src[1] == '.' && src[2] == '\0') continue;
+
+		int len = String_Length(src);
 		String_AppendUtf8(&path, src, len);
-		is_dir = entry->d_type == DT_DIR;
-		/* TODO: fallback to stat when this fails */
+		int is_dir = entry->d_type == DT_DIR;
+		// TODO: fallback to stat when this fails
 
 		if (is_dir) {
 			res = Directory_Enum(&path, obj, callback);
@@ -178,17 +181,17 @@ cc_result Directory_Enum(const cc_string* dirPath, void* obj, Directory_EnumCall
 		errno = 0;
 	}
 
-	res = errno; /* return code from readdir */
+	res = errno; // return code from readdir
 	closedir(dirPtr);
 	return res;
 }
 
 static cc_result File_Do(cc_file* file, const cc_string* path, int mode) {
+	if (!fat_available) return ENOSYS;
+	
 	char str[NATIVE_STR_LEN];
 	GetNativePath(str, path);
-
-	Platform_Log1("Opening file: %c", str);
-	*file = open(str, mode, 0666); // FS has no permissions anyways
+	*file = open(str, mode, 0);
 	return *file == -1 ? errno : 0;
 }
 
@@ -236,75 +239,140 @@ cc_result File_Length(cc_file file, cc_uint32* len) {
 /*########################################################################################################################*
 *--------------------------------------------------------Threading--------------------------------------------------------*
 *#########################################################################################################################*/
-void Thread_Sleep(cc_uint32 milliseconds) { 
-	svcSleepThread(milliseconds * NS_PER_MS); 
-}
+void Thread_Sleep(cc_uint32 milliseconds) { usleep(milliseconds * 1000); }
 
-static void Exec3DSThread(void* param) {
+static void* ExecThread(void* param) {
 	((Thread_StartFunc)param)(); 
+	return NULL;
 }
 
 void* Thread_Create(Thread_StartFunc func) {
-	//TODO: Not quite correct, but eh
-	return threadCreate(Exec3DSThread, (void*)func, 256 * 1024, 0x3f, -2, false);
+	return Mem_Alloc(1, sizeof(lwp_t), "thread");
 }
 
 void Thread_Start2(void* handle, Thread_StartFunc func) {
-	
+	lwp_t* ptr = (lwp_t*)handle;
+	int res = LWP_CreateThread(ptr, ExecThread, (void*)func, NULL, 256 * 1024, 80);
+	if (res) Logger_Abort2(res, "Creating thread");
 }
 
 void Thread_Detach(void* handle) {
-	Thread thread = (Thread)handle;
-	threadDetach(thread);
+	// TODO: Leaks return value of thread ???
+	lwp_t* ptr = (lwp_t*)handle;
+	Mem_Free(ptr);
 }
 
 void Thread_Join(void* handle) {
-	Thread thread = (Thread)handle;
-	threadJoin(thread, U64_MAX);
-	threadFree(thread);
+	lwp_t* ptr = (lwp_t*)handle;
+	int res = LWP_JoinThread(*ptr, NULL);
+	if (res) Logger_Abort2(res, "Joining thread");
+	Mem_Free(ptr);
 }
 
 void* Mutex_Create(void) {
-	LightLock* lock = (LightLock*)Mem_Alloc(1, sizeof(LightLock), "mutex");
-	LightLock_Init(lock);
-	return lock;
+	mutex_t* ptr = (mutex_t*)Mem_Alloc(1, sizeof(mutex_t), "mutex");
+	int res = LWP_MutexInit(ptr, false);
+	if (res) Logger_Abort2(res, "Creating mutex");
+	return ptr;
 }
 
 void Mutex_Free(void* handle) {
+	mutex_t* mutex = (mutex_t*)handle;
+	int res = LWP_MutexDestroy(*mutex);
+	if (res) Logger_Abort2(res, "Destroying mutex");
 	Mem_Free(handle);
 }
 
 void Mutex_Lock(void* handle) {
-	LightLock_Lock((LightLock*)handle);
+	mutex_t* mutex = (mutex_t*)handle;
+	int res = LWP_MutexLock(*mutex);
+	if (res) Logger_Abort2(res, "Locking mutex");
 }
 
 void Mutex_Unlock(void* handle) {
-	LightLock_Unlock((LightLock*)handle);
+	mutex_t* mutex = (mutex_t*)handle;
+	int res = LWP_MutexUnlock(*mutex);
+	if (res) Logger_Abort2(res, "Unlocking mutex");
 }
 
+// should really use a semaphore with max 1.. too bad no 'TimedWait' though
+struct WaitData {
+	cond_t  cond;
+	mutex_t mutex;
+	int signalled; // For when Waitable_Signal is called before Waitable_Wait
+};
+
 void* Waitable_Create(void) {
-	LightEvent* event = (LightEvent*)Mem_Alloc(1, sizeof(LightEvent), "waitable");
-	LightEvent_Init(event, RESET_ONESHOT);
-	return event;
+	struct WaitData* ptr = (struct WaitData*)Mem_Alloc(1, sizeof(struct WaitData), "waitable");
+	int res;
+	
+	res = LWP_CondInit(&ptr->cond);
+	if (res) Logger_Abort2(res, "Creating waitable");
+	res = LWP_MutexInit(&ptr->mutex, false);
+	if (res) Logger_Abort2(res, "Creating waitable mutex");
+
+	ptr->signalled = false;
+	return ptr;
 }
 
 void Waitable_Free(void* handle) {
+	struct WaitData* ptr = (struct WaitData*)handle;
+	int res;
+	
+	res = LWP_CondDestroy(ptr->cond);
+	if (res) Logger_Abort2(res, "Destroying waitable");
+	res = LWP_MutexDestroy(ptr->mutex);
+	if (res) Logger_Abort2(res, "Destroying waitable mutex");
 	Mem_Free(handle);
 }
 
 void Waitable_Signal(void* handle) {
-	LightEvent_Signal((LightEvent*)handle);
+	struct WaitData* ptr = (struct WaitData*)handle;
+	int res;
+
+	Mutex_Lock(&ptr->mutex);
+	ptr->signalled = true;
+	Mutex_Unlock(&ptr->mutex);
+
+	res = LWP_CondSignal(ptr->cond);
+	if (res) Logger_Abort2(res, "Signalling event");
 }
 
 void Waitable_Wait(void* handle) {
-	LightEvent_Wait((LightEvent*)handle);
+	struct WaitData* ptr = (struct WaitData*)handle;
+	int res;
+
+	Mutex_Lock(&ptr->mutex);
+	if (!ptr->signalled) {
+		res = LWP_CondWait(ptr->cond, ptr->mutex);
+		if (res) Logger_Abort2(res, "Waitable wait");
+	}
+	ptr->signalled = false;
+	Mutex_Unlock(&ptr->mutex);
 }
 
 void Waitable_WaitFor(void* handle, cc_uint32 milliseconds) {
-	s64 timeout_ns = milliseconds * (1000 * 1000); // milliseconds to nanoseconds
-	int res = LightEvent_WaitTimeout((LightEvent*)handle, timeout_ns);
-	if (res) Logger_Abort2(res, "Waiting timed event");
+	struct WaitData* ptr = (struct WaitData*)handle;
+	struct timespec ts;
+	int res;
+
+	ts.tv_sec  = milliseconds / 1000;
+	ts.tv_nsec = milliseconds % 1000;
+
+	Mutex_Lock(&ptr->mutex);
+	if (!ptr->signalled) {
+		res = LWP_CondTimedWait(ptr->cond, ptr->mutex, &ts);
+		if (res && res != ETIMEDOUT) Logger_Abort2(res, "Waitable wait for");
+	}
+	ptr->signalled = false;
+	Mutex_Unlock(&ptr->mutex);
 }
+
+
+/*########################################################################################################################*
+*--------------------------------------------------------Font/Text--------------------------------------------------------*
+*#########################################################################################################################*/
+void Platform_LoadSysFonts(void) { }
 
 
 /*########################################################################################################################*
@@ -316,35 +384,26 @@ union SocketAddress {
 };
 
 static int ParseHost(union SocketAddress* addr, const char* host) {
-	struct addrinfo hints = { 0 };
-	struct addrinfo* result;
-	struct addrinfo* cur;
-	int success = 0;
+#ifdef HW_RVL
+	struct hostent* res = net_gethostbyname(host);
+	
+	if (!res || res->h_addrtype != AF_INET) return false;
+	// Must have at least one IPv4 address
+	if (!res->h_addr_list[0]) return false;
 
-	hints.ai_family   = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	int res = getaddrinfo(host, NULL, &hints, &result);
-	if (res) return 0;
-
-	for (cur = result; cur; cur = cur->ai_next) {
-		if (cur->ai_family != AF_INET) continue;
-		success = true;
-
-		Mem_Copy(addr, cur->ai_addr, cur->ai_addrlen);
-		break;
-	}
-
-	freeaddrinfo(result);
-	return success;
+	addr->v4.sin_addr = *(struct in_addr*)res->h_addr_list[0];
+	return true;
+#else
+	// DNS resolution not implemented in gamecube libbba
+	return false;
+#endif
 }
 
 static int ParseAddress(union SocketAddress* addr, const cc_string* address) {
 	char str[NATIVE_STR_LEN];
 	String_EncodeUtf8(str, address);
 
-	if (inet_pton(AF_INET,  str, &addr->v4.sin_addr) > 0) return true;
+	if (inet_aton(str, &addr->v4.sin_addr) > 0) return true;
 	return ParseHost(addr, str);
 }
 
@@ -357,66 +416,108 @@ cc_result Socket_Connect(cc_socket* s, const cc_string* address, int port, cc_bo
 	union SocketAddress addr;
 
 	*s = -1;
-	if (!ParseAddress(&addr, address))
-		return ERR_INVALID_ARGUMENT;
+	if (!ParseAddress(&addr, address)) return ERR_INVALID_ARGUMENT;
 
-	*s = socket(AF_INET, SOCK_STREAM, 0); // https://www.3dbrew.org/wiki/SOCU:socket
-	if (*s == -1) return errno;
-	
+	*s = net_socket(AF_INET, SOCK_STREAM, 0);
+	if (*s < 0) return *s;
+
 	if (nonblocking) {
-		int flags = fcntl(*s, F_GETFL, 0);
-		if (flags >= 0) fcntl(*s, F_SETFL, flags | O_NONBLOCK);
+		int blocking_raw = -1; /* non-blocking mode */
+		net_ioctl(*s, FIONBIO, &blocking_raw);
 	}
 
 	addr.v4.sin_family = AF_INET;
 	addr.v4.sin_port   = htons(port);
 
-	int res = connect(*s, &addr.raw, sizeof(addr.v4));
-	return res == -1 ? errno : 0;
+	int res = net_connect(*s, &addr.raw, sizeof(addr.v4));
+	return res < 0 ? res : 0;
 }
 
 cc_result Socket_Read(cc_socket s, cc_uint8* data, cc_uint32 count, cc_uint32* modified) {
-	int recvCount = recv(s, data, count, 0);
-	if (recvCount != -1) { *modified = recvCount; return 0; }
-	*modified = 0; return errno;
+	int res = net_recv(s, data, count, 0);
+	if (res < 0) { *modified = 0; return res; }
+	
+	*modified = res; return 0;
 }
 
 cc_result Socket_Write(cc_socket s, const cc_uint8* data, cc_uint32 count, cc_uint32* modified) {
-	int sentCount = send(s, data, count, 0);
-	if (sentCount != -1) { *modified = sentCount; return 0; }
-	*modified = 0; return errno;
+	int res = net_send(s, data, count, 0);
+	if (res < 0) { *modified = 0; return res; }
+	
+	*modified = res; return 0;
 }
 
 void Socket_Close(cc_socket s) {
-	shutdown(s, SHUT_RDWR);
-	close(s);
+	net_shutdown(s, 2); // SHUT_RDWR = 2
+	net_close(s);
 }
 
+#ifdef HW_RVL
+// libogc only implements net_poll for wii currently
 static cc_result Socket_Poll(cc_socket s, int mode, cc_bool* success) {
-	struct pollfd pfd;
-
-	pfd.fd     = s;
+	struct pollsd pfd;
+	pfd.socket = s;
 	pfd.events = mode == SOCKET_POLL_READ ? POLLIN : POLLOUT;
-	if (poll(&pfd, 1, 0) == -1) { *success = false; return errno; }
 	
-	/* to match select, closed socket still counts as readable */
+	int res = net_poll(&pfd, 1, 0);
+	if (res < 0) { *success = false; return res; }
+	
+	// to match select, closed socket still counts as readable
 	int flags = mode == SOCKET_POLL_READ ? (POLLIN | POLLHUP) : POLLOUT;
 	*success  = (pfd.revents & flags) != 0;
 	return 0;
 }
+#else
+// libogc only implements net_select for gamecube currently
+static cc_result Socket_Poll(cc_socket s, int mode, cc_bool* success) {
+	fd_set set;
+	struct timeval time = { 0 };
+	int res; // number of 'ready' sockets
+	FD_ZERO(&set);
+	FD_SET(s, &set);
+	if (mode == SOCKET_POLL_READ) {
+		res = net_select(s + 1, &set, NULL, NULL, &time);
+	} else {
+		res = net_select(s + 1, NULL, &set, NULL, &time);
+	}
+	if (res < 0) { *success = false; return res; }
+	*success = FD_ISSET(s, &set) != 0; return 0;
+}
+#endif
 
 cc_result Socket_CheckReadable(cc_socket s, cc_bool* readable) {
 	return Socket_Poll(s, SOCKET_POLL_READ, readable);
 }
 
 cc_result Socket_CheckWritable(cc_socket s, cc_bool* writable) {
-	socklen_t resultSize = sizeof(socklen_t);
-	cc_result res = Socket_Poll(s, SOCKET_POLL_WRITE, writable);
+	u32 resultSize = sizeof(u32);
+	cc_result res  = Socket_Poll(s, SOCKET_POLL_WRITE, writable);
 	if (res || *writable) return res;
 
+	return 0;
+	// TODO FIX with updated devkitpro ???
+	
 	/* https://stackoverflow.com/questions/29479953/so-error-value-after-successful-socket-operation */
-	getsockopt(s, SOL_SOCKET, SO_ERROR, &res, &resultSize);
+	net_getsockopt(s, SOL_SOCKET, SO_ERROR, &res, resultSize);
 	return res;
+}
+static void InitSockets(void) {
+#ifdef HW_RVL
+	int ret = net_init();
+	Platform_Log1("Network setup result: %i", &ret);
+#else
+	// https://github.com/devkitPro/wii-examples/blob/master/devices/network/sockettest/source/sockettest.c
+	char localip[16] = {0};
+	char netmask[16] = {0};
+	char gateway[16] = {0};
+	
+	int ret = if_config(localip, netmask, gateway, TRUE, 20);
+	if (ret >= 0) {
+		Platform_Log3("Network ip: %c, gw: %c, mask %c", localip, gateway, netmask);
+	} else {
+		Platform_Log1("Network setup failed: %i", &ret);
+	}
+#endif
 }
 
 
@@ -426,9 +527,11 @@ cc_result Socket_CheckWritable(cc_socket s, cc_bool* writable) {
 cc_result Process_StartGame2(const cc_string* args, int numArgs) {
 	return ERR_NOT_SUPPORTED;
 }
+
 void Process_Exit(cc_result code) { exit(code); }
 
 cc_result Process_StartOpen(const cc_string* args) {
+	// TODO launch browser
 	return ERR_NOT_SUPPORTED;
 }
 
@@ -441,23 +544,31 @@ cc_bool Updater_Clean(void) { return true; }
 
 const struct UpdaterInfo Updater_Info = { "&eCompile latest source code to update", 0 };
 
-cc_result Updater_Start(const char** action) { *action = "Starting"; return ERR_NOT_SUPPORTED; }
+cc_result Updater_Start(const char** action) {
+	*action = "Starting game";
+	return ERR_NOT_SUPPORTED;
+}
 
-cc_result Updater_GetBuildTime(cc_uint64* timestamp) { return ERR_NOT_SUPPORTED; }
+cc_result Updater_GetBuildTime(cc_uint64* timestamp) {
+	return ERR_NOT_SUPPORTED;
+}
 
-cc_result Updater_MarkExecutable(void) { return ERR_NOT_SUPPORTED; }
+cc_result Updater_MarkExecutable(void) {
+	return ERR_NOT_SUPPORTED;
+}
 
-cc_result Updater_SetNewBuildTime(cc_uint64 timestamp) { return ERR_NOT_SUPPORTED; }
+cc_result Updater_SetNewBuildTime(cc_uint64 timestamp) {
+	return ERR_NOT_SUPPORTED;
+}
 
 
 /*########################################################################################################################*
 *-------------------------------------------------------Dynamic lib-------------------------------------------------------*
 *#########################################################################################################################*/
-
+/* TODO can this actually be supported somehow */
 const cc_string DynamicLib_Ext = String_FromConst(".so");
 
-void* DynamicLib_Load2(const cc_string* path) { return NULL; }
-
+void* DynamicLib_Load2(const cc_string* path)      { return NULL; }
 void* DynamicLib_Get2(void* lib, const char* name) { return NULL; }
 
 cc_bool DynamicLib_DescribeError(cc_string* dst) {
@@ -469,27 +580,13 @@ cc_bool DynamicLib_DescribeError(cc_string* dst) {
 /*########################################################################################################################*
 *--------------------------------------------------------Platform---------------------------------------------------------*
 *#########################################################################################################################*/
-#define SOC_CTX_ALIGN 0x1000
-#define SOC_CTX_SIZE  0x1000 * 128
-
-void Platform_Init(void) { 
-	// create root directories (no permissions anyways)
-	mkdir("sdmc://3ds",            0666);
-	mkdir("sdmc://3ds/ClassiCube", 0666);
+void Platform_Init(void) {
+	fat_available = fatInitDefault();
+	if (fat_available) mkdir("sd:/ClassiCube", 0); // create root 'ClassiCube' directory
 	
-	// See https://github.com/devkitPro/libctru/blob/master/libctru/include/3ds/services/soc.h
-	//  * @param context_addr Address of a page-aligned (0x1000) buffer to be used.
-	//  * @param context_size Size of the buffer, a multiple of 0x1000.
-	//  * @note The specified context buffer can no longer be accessed by the process which called this function, since the userland permissions for this block are set to no-access.
-	void* buffer = memalign(SOC_CTX_ALIGN, SOC_CTX_SIZE);
-	if (!buffer) return;
-	socInit(buffer, SOC_CTX_SIZE);
+	InitSockets();
 }
-
-void Platform_Free(void) {
-	socExit();
-	// TODO free soc buffer? probably no point
-}
+void Platform_Free(void) { }
 
 cc_bool Platform_DescribeError(cc_result res, cc_string* dst) {
 	char chars[NATIVE_STR_LEN];
@@ -524,15 +621,14 @@ cc_result Platform_Decrypt(const void* data, int len, cc_string* dst) {
 *-----------------------------------------------------Configuration-------------------------------------------------------*
 *#########################################################################################################################*/
 int Platform_GetCommandLineArgs(int argc, STRING_REF char** argv, cc_string* args) {
-	// 3DS *sometimes* doesn't use argv[0] for program name and so argc will be 0
-	// (e.g. when running from Citra)
+	// GC/WII *sometimes* doesn't use argv[0] for program name and so argc will be 0
+	if (!argc) return 0;
+
 	int count = min(argc, GAME_MAX_CMDARGS);
-	Platform_Log1("ARGS: %i", &count);
-	
 	for (int i = 0; i < count; i++) {
 		args[i] = String_FromReadonly(argv[i]);
-		Platform_Log2("  ARG %i = %c", &i, argv[i]);
 	}
+	
 	return count;
 }
 

@@ -138,7 +138,13 @@ irix:
 	$(MAKE) $(ENAME) PLAT=irix
 psp:
 	$(MAKE) ClassiCube.elf PLAT=psp
-
+3ds:
+	$(MAKE) -f Makefile_3DS PLAT=3ds
+wii:
+	$(MAKE) -f Makefile_wii PLAT=wii
+gamecube:
+	$(MAKE) -f Makefile_gamecube PLAT=gamecube
+	
 clean:
 	$(DEL) $(OBJECTS)
 

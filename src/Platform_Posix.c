@@ -4,7 +4,7 @@
 #include "_PlatformBase.h"
 #include "Stream.h"
 #include "ExtMath.h"
-#include "Drawer2D.h"
+#include "SystemFonts.h"
 #include "Funcs.h"
 #include "Window.h"
 #include "Utils.h"
@@ -529,8 +529,8 @@ int Socket_ValidAddress(const cc_string* address) {
 	return ParseAddress(&addr, address);
 }
 
-cc_result Socket_Connect(cc_socket* s, const cc_string* address, int port) {
-	int family, addrSize = 0, blocking_raw = -1; /* non-blocking mode */
+cc_result Socket_Connect(cc_socket* s, const cc_string* address, int port, cc_bool nonblocking) {
+	int family, addrSize = 0;
 	union SocketAddress addr;
 	cc_result res;
 
@@ -540,7 +540,11 @@ cc_result Socket_Connect(cc_socket* s, const cc_string* address, int port) {
 
 	*s = socket(family, SOCK_STREAM, IPPROTO_TCP);
 	if (*s == -1) return errno;
-	ioctl(*s, FIONBIO, &blocking_raw);
+
+	if (nonblocking) {
+		int blocking_raw = -1; /* non-blocking mode */
+		ioctl(*s, FIONBIO, &blocking_raw);
+	}
 
 	#ifdef AF_INET6
 	if (family == AF_INET6) {
@@ -617,7 +621,7 @@ cc_result Socket_CheckReadable(cc_socket s, cc_bool* readable) {
 }
 
 cc_result Socket_CheckWritable(cc_socket s, cc_bool* writable) {
-	socklen_t resultSize;
+	socklen_t resultSize = sizeof(socklen_t);
 	cc_result res = Socket_Poll(s, SOCKET_POLL_WRITE, writable);
 	if (res || *writable) return res;
 
